@@ -125,8 +125,7 @@ function Install-PowershellGalleryModule {
 function New-PowerShellProfile {
     <#
     .SYNOPSIS
-        Creates a PowerShell profile file if it does not exist.
-
+        Creates the current host PowerShell profile file if it does not exist.
     .OUTPUTS
         Void
     #>
@@ -134,19 +133,27 @@ function New-PowerShellProfile {
     [OutputType([void])]
     param()
 
-    if (-not (Test-Path -Path $PROFILE)) {
-        New-Item -ItemType File -Path $PROFILE -Force | Out-Null
-        Write-Host "PowerShell profile created at '$PROFILE'." -ForegroundColor Green
+    $profilePath = $PROFILE.CurrentUserCurrentHost
+
+    if (-not (Test-Path -Path $profilePath)) {
+        $profileDir = Split-Path -Path $profilePath -Parent
+        if (-not (Test-Path -Path $profileDir)) {
+            New-Item -ItemType Directory -Path $profileDir -Force | Out-Null
+        }
+        New-Item -ItemType File -Path $profilePath -Force | Out-Null
+        Write-Host "PowerShell profile created at '$profilePath'." -ForegroundColor Green
+    }
+    else {
+        Write-Host "PowerShell profile already exists at '$profilePath'."
     }
 }
 
 function Add-ContentToPowerShellProfile {
     <#
     .SYNOPSIS
-        Adds content to the PowerShell profile if it does not already exist.
-
+        Adds content to the current PowerShell profile if not already present.
     .PARAMETER Content
-        The content to add to the profile.
+        The content to add.
     #>
     [CmdletBinding()]
     [OutputType([void])]
@@ -155,14 +162,16 @@ function Add-ContentToPowerShellProfile {
         [string]$Content
     )
 
-    if (-not (Test-Path -Path $PROFILE)) {
+    $profilePath = $PROFILE.CurrentUserCurrentHost
+
+    if (-not (Test-Path -Path $profilePath)) {
         New-PowerShellProfile
     }
 
-    $profileContent = Get-Content -Path $PROFILE -Raw
+    $profileContent = Get-Content -Path $profilePath -Raw -ErrorAction SilentlyContinue
 
-    if (-not $profileContent -or $profileContent -notmatch [regex]::Escape($Content)) {
-        Add-Content -Path $PROFILE -Value "`n$Content"
+    if ([string]::IsNullOrWhiteSpace($profileContent) -or $profileContent -notmatch [regex]::Escape($Content.Trim())) {
+        Add-Content -Path $profilePath -Value "`n$Content"
         Write-Host "Added to profile: $Content" -ForegroundColor Green
     }
     else {
@@ -210,6 +219,7 @@ function Update-WtDefaultsFontFace {
         The font face to set as default.
     #>
     [CmdletBinding()]
+    [OutputType([void])]
     param(
         [Parameter(Mandatory)]
         [string]$Face
