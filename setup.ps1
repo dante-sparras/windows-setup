@@ -352,7 +352,7 @@ else {
 }
 
 # Change Windows terminal font to Geist Mono Nerd Font
-Update-WtDefaultsFontFace -Face "GeistMono Nerd Font"
+Update-WtDefaultsFontFace -Face "GeistMono NF"
 
 # =====================================
 # Developer Packages
