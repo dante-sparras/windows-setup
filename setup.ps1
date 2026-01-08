@@ -125,33 +125,33 @@ function Install-PowershellGalleryModule {
 function New-PowerShellProfile {
     <#
     .SYNOPSIS
-        Creates the current host PowerShell profile file if it does not exist.
-    .OUTPUTS
-        Void
+        Creates PowerShell profile files for both Windows PowerShell and PowerShell 7 if they do not exist.
     #>
     [CmdletBinding()]
     [OutputType([void])]
     param()
 
-    $profilePath = $PROFILE.CurrentUserCurrentHost
+    $profiles = @(
+        $PROFILE.CurrentUserCurrentHost  # Windows PowerShell profile
+        $PROFILE.CurrentUserAllHosts     # PowerShell 7 AllHosts profile
+    )
 
-    if (-not (Test-Path -Path $profilePath)) {
-        $profileDir = Split-Path -Path $profilePath -Parent
-        if (-not (Test-Path -Path $profileDir)) {
-            New-Item -ItemType Directory -Path $profileDir -Force | Out-Null
+    foreach ($path in $profiles) {
+        if ($path -and -not (Test-Path -Path $path)) {
+            $dir = Split-Path -Path $path -Parent
+            if (-not (Test-Path -Path $dir)) {
+                New-Item -ItemType Directory -Path $dir -Force | Out-Null
+            }
+            New-Item -ItemType File -Path $path -Force | Out-Null
+            Write-Host "Created profile: $path" -ForegroundColor Green
         }
-        New-Item -ItemType File -Path $profilePath -Force | Out-Null
-        Write-Host "PowerShell profile created at '$profilePath'." -ForegroundColor Green
-    }
-    else {
-        Write-Host "PowerShell profile already exists at '$profilePath'."
     }
 }
 
 function Add-ContentToPowerShellProfile {
     <#
     .SYNOPSIS
-        Adds content to the current PowerShell profile if not already present.
+        Adds content to both Windows PowerShell and PowerShell 7 profiles if not already present.
     .PARAMETER Content
         The content to add.
     #>
@@ -162,20 +162,22 @@ function Add-ContentToPowerShellProfile {
         [string]$Content
     )
 
-    $profilePath = $PROFILE.CurrentUserCurrentHost
+    $profiles = @(
+        $PROFILE.CurrentUserCurrentHost
+        $PROFILE.CurrentUserAllHosts
+    )
 
-    if (-not (Test-Path -Path $profilePath)) {
-        New-PowerShellProfile
-    }
+    New-PowerShellProfile  # Ensures both profiles exist
 
-    $profileContent = Get-Content -Path $profilePath -Raw -ErrorAction SilentlyContinue
+    foreach ($path in $profiles) {
+        if (-not $path) { continue }
 
-    if ([string]::IsNullOrWhiteSpace($profileContent) -or $profileContent -notmatch [regex]::Escape($Content.Trim())) {
-        Add-Content -Path $profilePath -Value "`n$Content"
-        Write-Host "Added to profile: $Content" -ForegroundColor Green
-    }
-    else {
-        Write-Host "Profile already contains: $Content" -ForegroundColor Yellow
+        $fileContent = Get-Content -Path $path -Raw -ErrorAction SilentlyContinue
+
+        if ([string]::IsNullOrWhiteSpace($fileContent) -or $fileContent -notmatch [regex]::Escape($Content.Trim())) {
+            Add-Content -Path $path -Value "`n$Content"
+            Write-Host "Added to $path" -ForegroundColor Green
+        }
     }
 }
 
