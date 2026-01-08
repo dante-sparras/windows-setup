@@ -299,7 +299,7 @@ Add-ContentToPowerShellProfile -Content "Import-Module Terminal-Icons"
 # Geist Mono Nerd Font (only if oh-my-posh is available)
 if (Test-CommandExists -Command "oh-my-posh") {
     Write-Host "Installing Geist Mono Nerd Font..." -ForegroundColor Cyan
-    oh-my-posh font install geist-mono
+    oh-my-posh font install GeistMono
 }
 else {
     Write-Warning "oh-my-posh not found in PATH. Skipping font installation. You may need to restart your terminal and run 'oh-my-posh font install geist-mono' manually."
