@@ -215,7 +215,6 @@ function Update-WtDefaultsFontFace {
         [string]$Face
     )
 
-    # Check common Windows Terminal settings paths
     $possiblePaths = @(
         "$env:LOCALAPPDATA\Packages\Microsoft.WindowsTerminal_8wekyb3d8bbwe\LocalState\settings.json",
         "$env:LOCALAPPDATA\Packages\Microsoft.WindowsTerminalPreview_8wekyb3d8bbwe\LocalState\settings.json",
@@ -225,26 +224,39 @@ function Update-WtDefaultsFontFace {
     $path = $possiblePaths | Where-Object { Test-Path $_ } | Select-Object -First 1
 
     if (-not $path) {
-        Write-Warning "Windows Terminal settings file not found. Please install Windows Terminal first or set the font manually."
+        Write-Warning "Windows Terminal settings file not found."
         return
     }
 
     try {
-        $settings = Get-Content $path -Raw | ConvertFrom-Json
+        # Read file and convert from JSON
+        $rawContent = Get-Content $path -Raw
+        $settings = $rawContent | ConvertFrom-Json
 
-        if (-not $settings.profiles) {
-            $settings | Add-Member -MemberType NoteProperty -Name profiles -Value ([PSCustomObject]@{})
-        }
-        if (-not $settings.profiles.defaults) {
-            $settings.profiles | Add-Member -MemberType NoteProperty -Name defaults -Value ([PSCustomObject]@{})
-        }
-        if (-not $settings.profiles.defaults.font) {
-            $settings.profiles.defaults | Add-Member -MemberType NoteProperty -Name font -Value ([PSCustomObject]@{})
+        # Ensure the 'profiles' object exists
+        if ($null -eq $settings.profiles) {
+            $settings | Add-Member -MemberType NoteProperty -Name "profiles" -Value ([PSCustomObject]@{ })
         }
 
-        $settings.profiles.defaults.font.face = $Face
+        # Ensure the 'defaults' object exists inside 'profiles'
+        if ($null -eq $settings.profiles.defaults) {
+            $settings.profiles | Add-Member -MemberType NoteProperty -Name "defaults" -Value ([PSCustomObject]@{ })
+        }
 
-        $settings | ConvertTo-Json -Depth 10 | Set-Content $path
+        # Ensure the 'font' object exists inside 'defaults'
+        # Note: In newer WT versions, 'font' is an object, not just a string
+        if ($null -eq $settings.profiles.defaults.font -or $settings.profiles.defaults.font -is [string]) {
+            # If font was a string or null, recreate it as an object
+            $settings.profiles.defaults | Add-Member -MemberType NoteProperty -Name "font" -Value ([PSCustomObject]@{ }) -Force
+        }
+
+        # Set the face property
+        $settings.profiles.defaults.font | Add-Member -MemberType NoteProperty -Name "face" -Value $Face -Force
+
+        # Convert back to JSON with sufficient depth
+        $jsonOutput = $settings | ConvertTo-Json -Depth 20
+        $jsonOutput | Set-Content $path -Encoding UTF8
+
         Write-Host "Windows Terminal font set to '$Face'." -ForegroundColor Green
     }
     catch {
