@@ -55,8 +55,7 @@ function Install-WingetPackage {
 
     try {
         Write-Host "Installing package '$PackageId'..." -ForegroundColor Cyan
-        winget install --id $PackageId --exact --accept-source-agreements --accept-package-agreements --disable-interactivity |
-        Out-Null
+        winget install --id $PackageId --exact --accept-source-agreements --accept-package-agreements --disable-interactivity
 
         if ($LASTEXITCODE -ne 0) {
             throw "Winget exited with code $LASTEXITCODE"
