@@ -229,38 +229,66 @@ function Update-WtDefaultsFontFace {
     }
 
     try {
-        # Read file and convert from JSON
-        $rawContent = Get-Content $path -Raw
-        $settings = $rawContent | ConvertFrom-Json
+        # Read file
+        $content = Get-Content $path -Raw
 
-        # Ensure the 'profiles' object exists
+        # Windows Terminal JSON often contains comments which ConvertFrom-Json can't handle.
+        # We strip them out just in case, though usually WT settings are clean.
+        $content = $content -replace '(?m)^\s*//.*$', ''
+
+        # Convert to Hashtable for easier manipulation
+        # If on PS7+, -AsHashtable works. For PS5, we use a different approach.
+        if ($PSVersionTable.PSVersion.Major -ge 6) {
+            $settings = $content | ConvertFrom-Json -AsHashtable
+        }
+        else {
+            # Legacy PS5.1 logic to ensure we have a modifiable object
+            $settings = $content | ConvertFrom-Json
+        }
+
+        # 1. Ensure 'profiles' exists and is a container
         if ($null -eq $settings.profiles) {
-            $settings | Add-Member -MemberType NoteProperty -Name "profiles" -Value ([PSCustomObject]@{ })
+            $settings | Add-Member -Name "profiles" -Value @{} -MemberType NoteProperty -Force
         }
 
-        # Ensure the 'defaults' object exists inside 'profiles'
+        # 2. Ensure 'defaults' exists inside 'profiles'
         if ($null -eq $settings.profiles.defaults) {
-            $settings.profiles | Add-Member -MemberType NoteProperty -Name "defaults" -Value ([PSCustomObject]@{ })
+            if ($settings.profiles -is [hashtable]) {
+                $settings.profiles["defaults"] = @{}
+            }
+            else {
+                $settings.profiles | Add-Member -Name "defaults" -Value @{} -MemberType NoteProperty -Force
+            }
         }
 
-        # Ensure the 'font' object exists inside 'defaults'
-        # Note: In newer WT versions, 'font' is an object, not just a string
+        # 3. Ensure 'font' exists inside 'defaults'
+        # If it's a string (old style), we overwrite it with an object
         if ($null -eq $settings.profiles.defaults.font -or $settings.profiles.defaults.font -is [string]) {
-            # If font was a string or null, recreate it as an object
-            $settings.profiles.defaults | Add-Member -MemberType NoteProperty -Name "font" -Value ([PSCustomObject]@{ }) -Force
+            if ($settings.profiles.defaults -is [hashtable]) {
+                $settings.profiles.defaults["font"] = @{}
+            }
+            else {
+                $settings.profiles.defaults | Add-Member -Name "font" -Value @{} -MemberType NoteProperty -Force
+            }
         }
 
-        # Set the face property
-        $settings.profiles.defaults.font | Add-Member -MemberType NoteProperty -Name "face" -Value $Face -Force
+        # 4. Set the face property using the most compatible method
+        if ($settings.profiles.defaults.font -is [hashtable]) {
+            $settings.profiles.defaults.font["face"] = $Face
+        }
+        else {
+            # Use Add-Member to bypass the "property not found" assignment error
+            $settings.profiles.defaults.font | Add-Member -Name "face" -Value $Face -MemberType NoteProperty -Force
+        }
 
-        # Convert back to JSON with sufficient depth
+        # Convert back to JSON
         $jsonOutput = $settings | ConvertTo-Json -Depth 20
         $jsonOutput | Set-Content $path -Encoding UTF8
 
-        Write-Host "Windows Terminal font set to '$Face'." -ForegroundColor Green
+        Write-Host "Windows Terminal font set to '$Face' successfully." -ForegroundColor Green
     }
     catch {
-        Write-Error "Failed to update Windows Terminal settings: $_"
+        Write-Error "Failed to update Windows Terminal settings: $($_.Exception.Message)"
     }
 }
 
