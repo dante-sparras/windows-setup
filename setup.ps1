@@ -125,19 +125,17 @@ function Install-PowershellGalleryModule {
 function New-PowerShellProfile {
     <#
     .SYNOPSIS
-        Creates PowerShell profile files for both Windows PowerShell and PowerShell 7 if they do not exist.
+        Creates PowerShell profile files for both Windows PowerShell (5.1) and PowerShell 7+ in their respective directories.
     #>
     [CmdletBinding()]
     [OutputType([void])]
     param()
 
-    $profiles = @(
-        $PROFILE.CurrentUserCurrentHost  # Windows PowerShell profile
-        $PROFILE.CurrentUserAllHosts     # PowerShell 7 AllHosts profile
-    )
+    $winPSPath = Join-Path -Path "$HOME\Documents" -ChildPath 'WindowsPowerShell\Microsoft.PowerShell_profile.ps1'
+    $pwshPath = Join-Path -Path "$HOME\Documents" -ChildPath 'PowerShell\Microsoft.PowerShell_profile.ps1'
 
-    foreach ($path in $profiles) {
-        if ($path -and -not (Test-Path -Path $path)) {
+    foreach ($path in @($winPSPath, $pwshPath)) {
+        if (-not (Test-Path -Path $path)) {
             $dir = Split-Path -Path $path -Parent
             if (-not (Test-Path -Path $dir)) {
                 New-Item -ItemType Directory -Path $dir -Force | Out-Null
@@ -151,7 +149,7 @@ function New-PowerShellProfile {
 function Add-ContentToPowerShellProfile {
     <#
     .SYNOPSIS
-        Adds content to both Windows PowerShell and PowerShell 7 profiles if not already present.
+        Adds content to both Windows PowerShell (5.1) and PowerShell 7+ profiles if not already present.
     .PARAMETER Content
         The content to add.
     #>
@@ -162,16 +160,12 @@ function Add-ContentToPowerShellProfile {
         [string]$Content
     )
 
-    $profiles = @(
-        $PROFILE.CurrentUserCurrentHost
-        $PROFILE.CurrentUserAllHosts
-    )
+    $winPSPath = Join-Path -Path "$HOME\Documents" -ChildPath 'WindowsPowerShell\Microsoft.PowerShell_profile.ps1'
+    $pwshPath = Join-Path -Path "$HOME\Documents" -ChildPath 'PowerShell\Microsoft.PowerShell_profile.ps1'
 
-    New-PowerShellProfile  # Ensures both profiles exist
+    New-PowerShellProfile  # Ensures both exist
 
-    foreach ($path in $profiles) {
-        if (-not $path) { continue }
-
+    foreach ($path in @($winPSPath, $pwshPath)) {
         $fileContent = Get-Content -Path $path -Raw -ErrorAction SilentlyContinue
 
         if ([string]::IsNullOrWhiteSpace($fileContent) -or $fileContent -notmatch [regex]::Escape($Content.Trim())) {
