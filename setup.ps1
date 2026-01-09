@@ -1,553 +1,278 @@
 #Requires -Version 5.1
 #Requires -RunAsAdministrator
 
-#region Utilities
+<#
+.SYNOPSIS
+    Modular System Setup Script.
 
-function Update-Path {
-    <#
-    .SYNOPSIS
-        Updates the PATH environment variable from the registry.
-    #>
+.DESCRIPTION
+    Runs specific setup tasks based on flags provided.
+
+.EXAMPLE
+    .\Setup.ps1 -All
+.EXAMPLE
+    .\Setup.ps1 -Apps -Profile
+#>
+
+[CmdletBinding()]
+param (
+    [switch]$All,
+    [switch]$Apps,
+    [switch]$Modules,
+    [switch]$Profile,
+    [switch]$Fonts
+)
+
+$ErrorActionPreference = 'Stop'
+Set-StrictMode -Version Latest
+
+# --- Logic Configuration ---
+
+if ($All) {
+    $Apps = $Modules = $Profile = $Fonts = $true
+}
+
+if (-not ($Apps -or $Modules -or $Profile -or $Fonts)) {
+    Write-Warning "No actions selected."
+    Write-Host "Usage: .\Setup.ps1 [-Apps] [-Modules] [-Profile] [-Fonts] [-All]" -ForegroundColor Gray
+    exit
+}
+
+# --- Helper Functions ---
+
+function Write-Log {
+    param(
+        [string]$Message,
+        [string]$Color = 'Cyan',
+        [switch]$TimeStamp
+    )
+    $prefix = if ($TimeStamp) { "[$((Get-Date).ToString('HH:mm:ss'))] " } else { "" }
+    Write-Host "$prefix$Message" -ForegroundColor $Color
+}
+
+function Update-EnvironmentPath {
+    Write-Log "Refreshing Environment Variables..." -Color DarkGray
     $env:PATH = [Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' + [Environment]::GetEnvironmentVariable('Path', 'User')
 }
 
-function Test-WingetPackageInstalled {
-    <#
-    .SYNOPSIS
-        Checks if a specific winget package is installed.
+function Add-ProfileLine {
+    param([Parameter(Mandatory)][string]$Line)
 
-    .PARAMETER PackageId
-        The exact package ID to check (e.g., "Mozilla.Firefox")
+    if ([string]::IsNullOrWhiteSpace($Line)) { return }
 
-    .OUTPUTS
-        Boolean - $true if package is installed, $false otherwise
-    #>
-    [CmdletBinding()]
-    [OutputType([bool])]
-    param(
-        [Parameter(Mandatory)]
-        [string]$PackageId
-    )
+    # Prefer CurrentUserAllHosts, fallback to standard profile path
+    $targetPath = if ($PROFILE.CurrentUserAllHosts) { $PROFILE.CurrentUserAllHosts } else { $PROFILE }
 
-    $result = winget list --id $PackageId --exact 2>$null
-    return $LASTEXITCODE -eq 0
-}
-
-function Install-WingetPackage {
-    <#
-    .SYNOPSIS
-        Installs a winget package silently, accepting agreements.
-
-    .PARAMETER PackageId
-        The exact package ID to install.
-    #>
-    [CmdletBinding()]
-    [OutputType([void])]
-    param(
-        [Parameter(Mandatory)]
-        [string]$PackageId
-    )
-
-    if (Test-WingetPackageInstalled $PackageId) {
-        Write-Host "Package '$PackageId' is already installed. Skipping." -ForegroundColor Yellow
-        return
+    # Ensure directory exists
+    $parentDir = Split-Path -Path $targetPath -Parent
+    if (-not (Test-Path -Path $parentDir)) {
+        New-Item -ItemType Directory -Path $parentDir -Force | Out-Null
     }
 
+    # Ensure file exists
+    if (-not (Test-Path -Path $targetPath)) {
+        New-Item -ItemType File -Path $targetPath -Force | Out-Null
+        Write-Log "Created new profile: $targetPath" -Color Gray
+    }
+
+    # Check content safely
     try {
-        Write-Host "Installing package '$PackageId'..." -ForegroundColor Cyan
-        winget install --id $PackageId --exact --accept-source-agreements --accept-package-agreements *>&1
-
-        if ($LASTEXITCODE -ne 0) {
-            throw "Winget exited with code $LASTEXITCODE"
-        }
-
-        Update-Path
-        Write-Host "Package '$PackageId' installed successfully." -ForegroundColor Green
-    }
-    catch {
-        Write-Error "Failed to install package '$PackageId': $_"
-    }
-}
-
-function Test-PowershellGalleryModuleInstalled {
-    <#
-    .SYNOPSIS
-        Checks if a PowerShell Gallery module is installed.
-
-    .PARAMETER ModuleName
-        The name of the module to check.
-
-    .OUTPUTS
-        Boolean - $true if module is installed, $false otherwise
-    #>
-    [CmdletBinding()]
-    [OutputType([bool])]
-    param(
-        [Parameter(Mandatory)]
-        [string]$ModuleName
-    )
-
-    $module = Get-Module -ListAvailable -Name $ModuleName
-    return $null -ne $module
-}
-
-function Install-PowershellGalleryModule {
-    <#
-    .SYNOPSIS
-        Installs a PowerShell Gallery module if not already installed.
-
-    .PARAMETER ModuleName
-        The name of the module to install.
-    #>
-    [CmdletBinding()]
-    [OutputType([void])]
-    param(
-        [Parameter(Mandatory)]
-        [string]$ModuleName
-    )
-
-    if (Test-PowershellGalleryModuleInstalled -ModuleName $ModuleName) {
-        Write-Host "Module '$ModuleName' is already installed. Skipping." -ForegroundColor Yellow
-        return
-    }
-
-    try {
-        Write-Host "Installing module '$ModuleName'..." -ForegroundColor Cyan
-        Install-Module -Name $ModuleName -Repository PSGallery -Force -Scope CurrentUser -ErrorAction Stop
-        Write-Host "Module '$ModuleName' installed successfully." -ForegroundColor Green
-    }
-    catch {
-        Write-Error "Failed to install module '$ModuleName': $_"
-    }
-}
-
-function New-PowerShellProfile {
-    <#
-    .SYNOPSIS
-        Creates PowerShell profile files for both Windows PowerShell (5.1) and PowerShell 7+ in their respective directories.
-    #>
-    [CmdletBinding()]
-    [OutputType([void])]
-    param()
-
-    $winPSPath = Join-Path -Path "$HOME\Documents" -ChildPath 'WindowsPowerShell\Microsoft.PowerShell_profile.ps1'
-    $pwshPath = Join-Path -Path "$HOME\Documents" -ChildPath 'PowerShell\Microsoft.PowerShell_profile.ps1'
-
-    foreach ($path in @($winPSPath, $pwshPath)) {
-        if (-not (Test-Path -Path $path)) {
-            $dir = Split-Path -Path $path -Parent
-            if (-not (Test-Path -Path $dir)) {
-                New-Item -ItemType Directory -Path $dir -Force | Out-Null
-            }
-            New-Item -ItemType File -Path $path -Force | Out-Null
-            Write-Host "Created profile: $path" -ForegroundColor Green
-        }
-    }
-}
-
-function Add-ContentToPowerShellProfile {
-    <#
-    .SYNOPSIS
-        Adds content to both Windows PowerShell (5.1) and PowerShell 7+ profiles if not already present.
-    .PARAMETER Content
-        The content to add.
-    #>
-    [CmdletBinding()]
-    [OutputType([void])]
-    param(
-        [Parameter(Mandatory)]
-        [string]$Content
-    )
-
-    $winPSPath = Join-Path -Path "$HOME\Documents" -ChildPath 'WindowsPowerShell\Microsoft.PowerShell_profile.ps1'
-    $pwshPath = Join-Path -Path "$HOME\Documents" -ChildPath 'PowerShell\Microsoft.PowerShell_profile.ps1'
-
-    New-PowerShellProfile  # Ensures both exist
-
-    foreach ($path in @($winPSPath, $pwshPath)) {
-        $fileContent = Get-Content -Path $path -Raw -ErrorAction SilentlyContinue
-
-        if ([string]::IsNullOrWhiteSpace($fileContent) -or $fileContent -notmatch [regex]::Escape($Content.Trim())) {
-            Add-Content -Path $path -Value "`n$Content"
-            Write-Host "Added to $path" -ForegroundColor Green
-        }
-    }
-}
-
-function Invoke-WinUtilWithConfig {
-    <#
-    .SYNOPSIS
-        Invokes WinUtil with the provided configuration.
-
-    .PARAMETER Config
-        The configuration object to pass to WinUtil.
-    #>
-    [CmdletBinding()]
-    [OutputType([void])]
-    param(
-        [Parameter(Mandatory)]
-        [PSObject]$Config
-    )
-
-    $configJson = $Config | ConvertTo-Json -Depth 5
-    $tempFile = [System.IO.Path]::GetTempFileName()
-
-    Set-Content -Path $tempFile -Value $configJson -Encoding UTF8
-
-    try {
-        Write-Host "Invoking WinUtil with configuration..." -ForegroundColor Cyan
-        Invoke-Expression "& { $(Invoke-RestMethod https://christitus.com/win) } -Config `"$tempFile`" -Run"
-    }
-    catch {
-        Write-Error "Failed to initialize WinUtil: $_"
-    }
-    finally {
-        Remove-Item -Path $tempFile -ErrorAction SilentlyContinue
-    }
-}
-
-function Update-WtDefaultsFontFace {
-    <#
-    .SYNOPSIS
-        Updates the default font face in Windows Terminal settings.
-    .PARAMETER Face
-        The font face to set as default.
-    #>
-    [CmdletBinding()]
-    [OutputType([void])]
-    param(
-        [Parameter(Mandatory)]
-        [string]$Face
-    )
-
-    $possiblePaths = @(
-        "$env:LOCALAPPDATA\Packages\Microsoft.WindowsTerminal_8wekyb3d8bbwe\LocalState\settings.json",
-        "$env:LOCALAPPDATA\Packages\Microsoft.WindowsTerminalPreview_8wekyb3d8bbwe\LocalState\settings.json",
-        "$env:LOCALAPPDATA\Microsoft\Windows Terminal\settings.json"
-    )
-
-    $path = $possiblePaths | Where-Object { Test-Path $_ } | Select-Object -First 1
-
-    if (-not $path) {
-        Write-Warning "Windows Terminal settings file not found."
-        return
-    }
-
-    try {
-        # Read file
-        $content = Get-Content $path -Raw
-
-        # Windows Terminal JSON often contains comments which ConvertFrom-Json can't handle.
-        # We strip them out just in case, though usually WT settings are clean.
-        $content = $content -replace '(?m)^\s*//.*$', ''
-
-        # Convert to Hashtable for easier manipulation
-        # If on PS7+, -AsHashtable works. For PS5, we use a different approach.
-        if ($PSVersionTable.PSVersion.Major -ge 6) {
-            $settings = $content | ConvertFrom-Json -AsHashtable
+        $content = Get-Content -Path $targetPath -Raw -ErrorAction SilentlyContinue
+        if ($null -eq $content -or $content -notmatch [regex]::Escape($Line)) {
+            Add-Content -Path $targetPath -Value "`n$Line"
+            Write-Log "Profile updated: Added '$Line'" -Color Green
         }
         else {
-            # Legacy PS5.1 logic to ensure we have a modifiable object
-            $settings = $content | ConvertFrom-Json
+            Write-Verbose "Skipping '$Line' (Already in profile)"
         }
-
-        # 1. Ensure 'profiles' exists and is a container
-        if ($null -eq $settings.profiles) {
-            $settings | Add-Member -Name "profiles" -Value @{} -MemberType NoteProperty -Force
-        }
-
-        # 2. Ensure 'defaults' exists inside 'profiles'
-        if ($null -eq $settings.profiles.defaults) {
-            if ($settings.profiles -is [hashtable]) {
-                $settings.profiles["defaults"] = @{}
-            }
-            else {
-                $settings.profiles | Add-Member -Name "defaults" -Value @{} -MemberType NoteProperty -Force
-            }
-        }
-
-        # 3. Ensure 'font' exists inside 'defaults'
-        # If it's a string (old style), we overwrite it with an object
-        if ($null -eq $settings.profiles.defaults.font -or $settings.profiles.defaults.font -is [string]) {
-            if ($settings.profiles.defaults -is [hashtable]) {
-                $settings.profiles.defaults["font"] = @{}
-            }
-            else {
-                $settings.profiles.defaults | Add-Member -Name "font" -Value @{} -MemberType NoteProperty -Force
-            }
-        }
-
-        # 4. Set the face property using the most compatible method
-        if ($settings.profiles.defaults.font -is [hashtable]) {
-            $settings.profiles.defaults.font["face"] = $Face
-        }
-        else {
-            # Use Add-Member to bypass the "property not found" assignment error
-            $settings.profiles.defaults.font | Add-Member -Name "face" -Value $Face -MemberType NoteProperty -Force
-        }
-
-        # Convert back to JSON
-        $jsonOutput = $settings | ConvertTo-Json -Depth 20
-        $jsonOutput | Set-Content $path -Encoding UTF8
-
-        Write-Host "Windows Terminal font set to '$Face' successfully." -ForegroundColor Green
     }
     catch {
-        Write-Error "Failed to update Windows Terminal settings: $($_.Exception.Message)"
+        Write-Log "Failed to read/write profile: $_" -Color Red
     }
 }
 
-function Test-CommandExists {
-    <#
-    .SYNOPSIS
-        Checks if a command exists in the current PATH.
+function Install-PSGalleryModule {
+    param([string[]]$Modules)
 
-    .PARAMETER Command
-        The command to check.
+    foreach ($module in $Modules) {
+        if (Get-Module -ListAvailable -Name $module) {
+            Write-Log "Skipping Module: $module (Installed)" -Color Yellow
+            continue
+        }
 
-    .OUTPUTS
-        Boolean - $true if command exists, $false otherwise
-    #>
-    [CmdletBinding()]
-    [OutputType([bool])]
-    param(
-        [Parameter(Mandatory)]
-        [string]$Command
-    )
-
-    return $null -ne (Get-Command -Name $Command -ErrorAction SilentlyContinue)
+        Write-Log "Installing Module: $module..." -Color Cyan -TimeStamp
+        try {
+            # Scope CurrentUser is safer; remove -Scope if AllUsers is desired
+            Install-Module -Name $module -Scope CurrentUser -Force -AllowClobber -ErrorAction Stop
+            Write-Log "Successfully Installed: $module" -Color Green
+        }
+        catch {
+            Write-Log "Failed to install $module`: $_" -Color Red
+        }
+    }
 }
 
-#endregion
+function Install-WingetApp {
+    param([string[]]$Apps)
 
-#region Main
+    foreach ($app in $Apps) {
+        Write-Verbose "Checking status for $app..."
 
-# =====================================
-# PowerShell Environment
-# =====================================
+        # 'winget list' is slow; -e ensures exact ID match
+        $isInstalled = winget list --id $app --exact --source winget 2>$null
 
-# Create Powershell Profile
-New-PowerShellProfile
+        if ($isInstalled) {
+            Write-Log "Skipping App: $app (Installed)" -Color Yellow
+            continue
+        }
 
-# zoxide
-Install-WingetPackage "ajeetdsouza.zoxide"
-Add-ContentToPowerShellProfile -Content 'Invoke-Expression (& { (zoxide init powershell | Out-String) })'
+        Write-Log "Installing App: $app..." -Color Cyan -TimeStamp
+        $args = @('install', '--id', $app, '-e', '--silent', '--accept-package-agreements', '--accept-source-agreements')
 
-# Oh My Posh
-Install-WingetPackage "JanDeDobbeleer.OhMyPosh"
-Add-ContentToPowerShellProfile -Content "oh-my-posh init pwsh | Invoke-Expression"
+        $process = Start-Process 'winget' -ArgumentList $args -Wait -PassThru -NoNewWindow
 
-# Terminal Icons
-Install-PowershellGalleryModule -ModuleName "Terminal-Icons"
-Add-ContentToPowerShellProfile -Content "Import-Module Terminal-Icons"
-
-# Geist Mono Nerd Font (only if oh-my-posh is available)
-if (Test-CommandExists -Command "oh-my-posh") {
-    Write-Host "Installing Geist Mono Nerd Font..." -ForegroundColor Cyan
-    oh-my-posh font install GeistMono
-}
-else {
-    Write-Warning "oh-my-posh not found in PATH. Skipping font installation. You may need to restart your terminal and run 'oh-my-posh font install geist-mono' manually."
+        if ($process.ExitCode -eq 0) {
+            Write-Log "Installed: $app" -Color Green
+        }
+        else {
+            Write-Log "Installation Failed: $app (Exit Code: $($process.ExitCode))" -Color Red
+        }
+    }
+    # Refresh Path once after all apps are processed
+    Update-EnvironmentPath
 }
 
-# Change Windows terminal font to Geist Mono Nerd Font
-Update-WtDefaultsFontFace -Face "GeistMono Nerd Font"
+function Install-TerminalFont {
+    param([string]$Font = 'GeistMono')
 
-# =====================================
-# Developer Packages
-# =====================================
+    if (-not (Get-Command 'oh-my-posh' -ErrorAction SilentlyContinue)) {
+        Write-Warning "Oh-My-Posh not found. Cannot auto-install fonts."
+        return
+    }
 
-# Bun
-Install-WingetPackage "Oven-sh.Bun"
+    Write-Log "Installing Font via Oh-My-Posh..." -TimeStamp
+    oh-my-posh font install $Font
 
-# NodeJS
-Install-WingetPackage "OpenJS.NodeJS"
+    $termSettingsPath = "$env:LOCALAPPDATA\Packages\Microsoft.WindowsTerminal_8wekyb3d8bbwe\LocalState\settings.json"
 
-# Git
-Install-WingetPackage  "Git.Git"
+    if (Test-Path $termSettingsPath) {
+        try {
+            $jsonContent = Get-Content $termSettingsPath -Raw
+            $json = $jsonContent | ConvertFrom-Json
 
-# GitHub CLI
-Install-WingetPackage "GitHub.cli"
+            # Ensure object structure exists
+            if (-not $json.profiles.defaults.PSObject.Properties.Match('font')) {
+                $json.profiles.defaults | Add-Member -MemberType NoteProperty -Name 'font' -Value @{}
+            }
 
-# GitHub Desktop
-Install-WingetPackage "GitHub.GitHubDesktop"
+            # Update Font Face
+            $fontName = "$Font Nerd Font"
+            if ($json.profiles.defaults.font.face -ne $fontName) {
+                $json.profiles.defaults.font | Add-Member -MemberType NoteProperty -Name 'face' -Value $fontName -Force
 
-# Docker Desktop
-Install-WingetPackage "Docker.DockerDesktop"
-
-# Visual Studio Code
-Install-WingetPackage "Microsoft.VisualStudioCode"
-
-# Visual Studio
-Install-WingetPackage "Microsoft.VisualStudio.Community"
-
-# Blender
-Install-WingetPackage "BlenderFoundation.Blender"
-
-# Figma
-Install-WingetPackage "Figma.Figma"
-
-# Claude Code
-Install-WingetPackage "Anthropic.ClaudeCode"
-
-# JetBrains Toolbox
-Install-WingetPackage "JetBrains.Toolbox"
-
-# JetBrains dotUltimate
-Install-WingetPackage "JetBrains.dotUltimate"
-
-# Unity Hub
-Install-WingetPackage "Unity.UnityHub"
-
-# Azure Data Studio
-Install-WingetPackage "Microsoft.AzureDataStudio"
-
-# .NET Desktop Runtime 3.1 / 5 / 6 / 7 / 8 / 9
-Install-WingetPackage "Microsoft.DotNet.DesktopRuntime.3_1"
-Install-WingetPackage "Microsoft.DotNet.DesktopRuntime.5"
-Install-WingetPackage "Microsoft.DotNet.DesktopRuntime.6"
-Install-WingetPackage "Microsoft.DotNet.DesktopRuntime.7"
-Install-WingetPackage "Microsoft.DotNet.DesktopRuntime.8"
-Install-WingetPackage "Microsoft.DotNet.DesktopRuntime.9"
-
-# Nuget
-Install-WingetPackage "Microsoft.NuGet"
-
-# SQL Server Management Studio
-Install-WingetPackage "Microsoft.SQLServerManagementStudio"
-
-# Visual C++ 2015-2022 32-bit and 64-bit
-Install-WingetPackage "Microsoft.VCRedist.2015+.x64"
-Install-WingetPackage "Microsoft.VCRedist.2015+.x86"
-
-# =====================================
-# General Packages
-# =====================================
-
-# Zen Browser
-Install-WingetPackage "Zen-Team.Zen-Browser"
-
-# Notion
-Install-WingetPackage "Notion.Notion"
-
-# Notion Calendar
-Install-WingetPackage "Notion.NotionCalendar"
-
-# Spotify
-Install-WingetPackage "Spotify.Spotify"
-
-# Discord
-Install-WingetPackage "Discord.Discord"
-
-# Zoom
-Install-WingetPackage "Zoom.Zoom"
-
-# Proton Drive
-Install-WingetPackage "Proton.ProtonDrive"
-
-# Proton Mail
-Install-WingetPackage "Proton.ProtonMail"
-
-# =====================================
-# Gaming Packages
-# =====================================
-
-# Steam
-Install-WingetPackage "Valve.Steam"
-
-# Epic Games Launcher
-Install-WingetPackage "EpicGames.EpicGamesLauncher"
-
-# =====================================
-# Utility Packages
-# =====================================
-
-# 7zip
-Install-WingetPackage "7zip.7zip"
-
-# VLC
-Install-WingetPackage "VideoLAN.VLC"
-
-# Microsoft PowerToys
-Install-WingetPackage "Microsoft.PowerToys"
-
-# Proton Authenticator
-Install-WingetPackage "Proton.ProtonAuthenticator"
-
-# Proton Pass
-Install-WingetPackage "Proton.ProtonPass"
-
-# Proton VPN
-Install-WingetPackage "Proton.ProtonVPN"
-
-# qBittorrent
-Install-WingetPackage "qBittorrent.qBittorrent"
-
-# Raycast (Microsoft Store)
-Install-WingetPackage "Raycast.Raycast"
-
-# Synergy
-Install-WingetPackage "Symless.Synergy"
-
-# WizFile
-Install-WingetPackage "AntibodySoftware.WizFile"
-
-# WizTree
-Install-WingetPackage "AntibodySoftware.WizTree"
-
-# Autoruns
-Install-WingetPackage "Microsoft.Sysinternals.Autoruns"
-
-# HWInfo
-Install-WingetPackage "REALiX.HWiNFO"
-
-# HWMonitor
-Install-WingetPackage "CPUID.HWMonitor"
-
-# Rufus Imager
-Install-WingetPackage "Rufus.Rufus"
-
-# Revo Uninstaller
-Install-WingetPackage "RevoUninstaller.RevoUninstaller"
-
-# =====================================
-# Windows Tweaks and Features
-# =====================================
-
-Invoke-WinUtilWithConfig -Config @{
-    WPFTweaks  = @(
-        "WPFTweaksRestorePoint",
-        "WPFTweaksRemoveGallery",
-        "WPFTweaksTele",
-        "WPFTweaksServices",
-        "WPFTweaksPowershell7",
-        "WPFTweaksActivity",
-        "WPFTweaksRemoveCopilot",
-        "WPFTweaksDVR",
-        "WPFTweaksDisableExplorerAutoDiscovery",
-        "WPFTweaksConsumerFeatures",
-        "WPFTweaksRemoveHome",
-        "WPFTweaksDisplay",
-        "WPFTweaksRightClickMenu",
-        "WPFTweaksDiskCleanup",
-        "WPFTweaksDeleteTempFiles",
-        "WPFTweaksLocation",
-        "WPFTweaksEndTaskOnTaskbar",
-        "WPFTweaksPowershell7Tele"
-    )
-    WPFInstall = @()
-    WPFFeature = @(
-        "WPFFeaturesSandbox",
-        "WPFFeatureshyperv",
-        "WPFFeaturesdotnet",
-        "WPFFeaturewsl"
-    )
-    Install    = @()
+                # CRITICAL: Depth 100 prevents nested JSON (like color schemes) from being deleted
+                $json | ConvertTo-Json -Depth 100 | Set-Content $termSettingsPath
+                Write-Log "Windows Terminal Configured to use $fontName" -Color Green
+            }
+            else {
+                Write-Log "Terminal already using $fontName" -Color Yellow
+            }
+        }
+        catch {
+            Write-Log "Error updating Terminal settings: $_" -Color Red
+        }
+    }
+    else {
+        Write-Warning "Windows Terminal settings.json not found."
+    }
 }
 
-Write-Host "`n=========================================" -ForegroundColor Cyan
-Write-Host "Setup complete!" -ForegroundColor Green
-Write-Host "Please restart your terminal for all changes to take effect." -ForegroundColor Yellow
-Write-Host "=========================================" -ForegroundColor Cyan
+# --- Data Definitions ---
 
-#endregion
+$appList = @(
+    # General
+    "Zen-Team.Zen-Browser",
+    "Notion.Notion",
+    "Notion.NotionCalendar",
+    "Spotify.Spotify",
+    "Discord.Discord",
+    "Zoom.Zoom",
+    "Proton.ProtonDrive",
+    "Proton.ProtonMail",
+    # Dev Core
+    "Oven-sh.Bun",
+    "OpenJS.NodeJS",
+    "Git.Git",
+    "GitHub.cli",
+    "GitHub.GitHubDesktop",
+    "Docker.DockerDesktop",
+    "Microsoft.VisualStudioCode",
+    "Microsoft.VisualStudio.Community",
+    "BlenderFoundation.Blender",
+    "Figma.Figma",
+    "JetBrains.Toolbox",
+    "JetBrains.dotUltimate",
+    "Unity.UnityHub",
+    "Microsoft.AzureDataStudio",
+    # Runtimes & Frameworks
+    "Microsoft.DotNet.DesktopRuntime.3_1",
+    "Microsoft.DotNet.DesktopRuntime.5",
+    "Microsoft.DotNet.DesktopRuntime.6",
+    "Microsoft.DotNet.DesktopRuntime.7",
+    "Microsoft.DotNet.DesktopRuntime.8",
+    "Microsoft.DotNet.DesktopRuntime.9",
+    "Microsoft.NuGet",
+    "Microsoft.SQLServerManagementStudio",
+    "Microsoft.VCRedist.2015+.x64",
+    "Microsoft.VCRedist.2015+.x86",
+    # Shell Enhancements
+    "ajeetdsouza.zoxide",
+    "JanDeDobbeleer.OhMyPosh",
+    # Gaming
+    "Valve.Steam",
+    "EpicGames.EpicGamesLauncher",
+    # Utility & System
+    "7zip.7zip",
+    "VideoLAN.VLC",
+    "Microsoft.PowerToys",
+    "Proton.ProtonAuthenticator",
+    "Proton.ProtonPass",
+    "Proton.ProtonVPN",
+    "qBittorrent.qBittorrent",
+    "Raycast.Raycast",
+    "Symless.Synergy",
+    "AntibodySoftware.WizFile",
+    "AntibodySoftware.WizTree",
+    "Microsoft.Sysinternals.Autoruns",
+    "REALiX.HWiNFO",
+    "CPUID.HWMonitor",
+    "Rufus.Rufus",
+    "RevoUninstaller.RevoUninstaller"
+)
+
+$moduleList = @(
+    "Terminal-Icons"
+)
+
+# --- Execution Flow ---
+
+if ($Apps) {
+    Install-WingetApp -Apps $appList
+}
+
+if ($Modules) {
+    Install-PSGalleryModule -Modules $moduleList
+}
+
+if ($Profile) {
+    Add-ProfileLine "Import-Module Terminal-Icons"
+    Add-ProfileLine "Set-PSReadLineOption -PredictionSource History"
+    Add-ProfileLine 'Invoke-Expression (& { (zoxide init powershell | Out-String) })'
+    Add-ProfileLine 'oh-my-posh init pwsh | Invoke-Expression'
+}
+
+if ($Fonts) {
+    Install-TerminalFont -Font "GeistMono"
+}
+
+Write-Log "Setup Complete." -Color Green -TimeStamp
