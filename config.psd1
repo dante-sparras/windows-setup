@@ -1,9 +1,31 @@
 @{
+    Repository      = "https://github.com/dante-sparras/windows-setup"
+    # ─────────────────────────────────────────────────────────────────────────
+    # Global Settings (Default Behavior)
+    # These can be overridden by command-line switches (e.g. -SkipRestore)
+    # ─────────────────────────────────────────────────────────────────────────
+    Settings        = @{
+        EnableRestorePoint = $true
+        EnableSophia       = $true
+        EnableWinget       = $true
+        EnableDotfiles     = $true
+        EnableFonts        = $true
+        EnableModules      = $true
+        EnableProfile      = $false # Default off, as it modifies user profile
+    }
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # External Resources & URLs
+    # ─────────────────────────────────────────────────────────────────────────
+    Resources       = @{
+        SophiaReleaseApi = "https://api.github.com/repos/farag2/Sophia-Script-for-Windows/releases/latest"
+    }
+
     # ─────────────────────────────────────────────────────────────────────────
     # Winget Settings
     # https://github.com/microsoft/winget-cli/blob/master/doc/Settings.md
     # ─────────────────────────────────────────────────────────────────────────
-    WingetSettings = @{
+    WingetSettings  = @{
         "visual" = @{
             "progressBar" = "rainbow"
         }
