@@ -77,6 +77,8 @@ function Write-Section {
 
 #region Bootstrap (Admin + PWSH)
 function Initialize-Bootstrap {
+    param($ScriptParams)
+
     # 1. Web / Memory Execution Handling
     if (-not $PSScriptRoot) {
         $tempDir = New-Item -Path (Join-Path $env:TEMP "WinSetup_$(Get-Date -Format 'yyyyMMdd_HHmmss')") -ItemType Directory -Force
@@ -95,7 +97,7 @@ function Initialize-Bootstrap {
 
         # Build Args
         $argsList = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $scriptPath, '-ConfigPath', $ConfigPath)
-        $PSBoundParameters.GetEnumerator() | Where-Object { $_.Key -ne 'ConfigPath' } | ForEach-Object {
+        $ScriptParams.GetEnumerator() | Where-Object { $_.Key -ne 'ConfigPath' } | ForEach-Object {
             if ($_.Value -is [switch] -and $_.Value) { $argsList += "-$($_.Key)" }
             elseif ($_.Value -isnot [switch]) { $argsList += "-$($_.Key)", $_.Value }
         }
@@ -110,7 +112,7 @@ function Initialize-Bootstrap {
     if (-not $isAdmin) {
         Write-Host "Elevating..." -ForegroundColor Yellow
         $argsList = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $PSCommandPath, '-ConfigPath', $ConfigPath)
-        $PSBoundParameters.GetEnumerator() | Where-Object { $_.Key -ne 'ConfigPath' } | ForEach-Object {
+        $ScriptParams.GetEnumerator() | Where-Object { $_.Key -ne 'ConfigPath' } | ForEach-Object {
             if ($_.Value -is [switch] -and $_.Value) { $argsList += "-$($_.Key)" }
             elseif ($_.Value -isnot [switch]) { $argsList += "-$($_.Key)", $_.Value }
         }
@@ -127,7 +129,7 @@ function Initialize-Bootstrap {
         }
         $pwshPath = (Get-Command 'pwsh').Source
         $argsList = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $PSCommandPath, '-ConfigPath', $ConfigPath)
-        $PSBoundParameters.GetEnumerator() | Where-Object { $_.Key -ne 'ConfigPath' } | ForEach-Object {
+        $ScriptParams.GetEnumerator() | Where-Object { $_.Key -ne 'ConfigPath' } | ForEach-Object {
             if ($_.Value -is [switch] -and $_.Value) { $argsList += "-$($_.Key)" }
             elseif ($_.Value -isnot [switch]) { $argsList += "-$($_.Key)", $_.Value }
         }
@@ -154,7 +156,12 @@ function Invoke-Sophia {
     try {
         $url = $Config.Resources.SophiaReleaseApi
         $release = Invoke-RestMethod $url
-        $zipUrl = $release.assets | Where-Object { $_.name -match 'Windows\.11' -and $_.name -notlike '*LTSC*' } | Select-Object -First 1 -ExpandProperty browser_download_url
+
+        if ($release.tag_name) {
+            Write-Log -Level INFO "Latest Release: $($release.tag_name)"
+        }
+
+        $zipUrl = $release.assets | Where-Object { $_.name -match 'Sophia\.Script\.for\.Windows\.11' -and $_.name -notlike '*LTSC*' } | Select-Object -First 1 -ExpandProperty browser_download_url
 
         $zipPath = Join-Path $Script:TempDir 'Sophia.zip'
         $dest = Join-Path $Script:TempDir 'Sophia'
@@ -182,17 +189,28 @@ function Install-Winget {
     }
 
     # Packages
-    foreach ($pkg in $Config.WingetPackages) {
-        if (-not $pkg.Id) { continue }
-        Write-Log "Installing: $($pkg.Id)"
-        $wingetArgs = @('install', '--id', $pkg.Id, '--exact', '--silent', '--accept-package-agreements', '--accept-source-agreements')
-        if ($pkg.Args) { $wingetArgs += $pkg.Args }
+    foreach ($entry in $Config.WingetPackages) {
+        # Normalize entry to hashtable/object
+        $pkg = if ($entry -is [string]) { @{ Id = $entry } } else { $entry }
 
-        $output = & winget @wingetArgs 2>&1
-        if ($LASTEXITCODE -eq 0) { Write-Log -Level SUCCESS "Installed $($pkg.Id)" }
+        if (-not $pkg.Id) { continue }
+
+        # Check if installed
+        $null = & winget list --id $pkg.Id --exact 2>&1
+        if ($LASTEXITCODE -eq 0) {
+            Write-Log "Already installed: $($pkg.Id)"
+        }
         else {
-            Write-Log -Level WARN "Failed $($pkg.Id)"
-            if ($Script:LogFile -and $output) { $output | Out-String | Add-Content -Path $Script:LogFile }
+            Write-Log "Installing: $($pkg.Id)"
+            $wingetArgs = @('install', '--id', $pkg.Id, '--exact', '--silent', '--accept-package-agreements', '--accept-source-agreements')
+            if ($pkg.Args) { $wingetArgs += $pkg.Args }
+
+            $output = & winget @wingetArgs 2>&1
+            if ($LASTEXITCODE -eq 0) { Write-Log -Level SUCCESS "Installed $($pkg.Id)" }
+            else {
+                Write-Log -Level WARN "Failed $($pkg.Id)"
+                if ($Script:LogFile -and $output) { $output | Out-String | Add-Content -Path $Script:LogFile }
+            }
         }
 
         # Dotfiles & Profile Extras
@@ -253,7 +271,7 @@ function Update-Profile {
 
 #region Main
 try {
-    Initialize-Bootstrap
+    Initialize-Bootstrap -ScriptParams $PSBoundParameters
 
     # Setup Context
     $Script:TempDir = New-Item -Path (Join-Path $env:TEMP "WinSetup_$(Get-Date -Format 'yyyyMMdd_HHmmss')") -ItemType Directory -Force
